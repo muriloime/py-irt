@@ -39,6 +39,16 @@ import numpy as np
 
 console = Console()
 
+A_MEAN = 1.0
+A_STD = 0.4
+
+B_MEAN = 1.0
+B_STD = 2.0
+
+# these values give mean, std close to empirical values
+C_ALPHA = 3
+C_BETA = 17.0
+
 
 @abstract_model.IrtModel.register("3pl")
 class ThreeParamLog(abstract_model.IrtModel):
@@ -57,63 +67,88 @@ class ThreeParamLog(abstract_model.IrtModel):
         num_items=num_items, num_subjects=num_subjects, device=device, verbose=verbose
     )
     self.params = {}
-    self.params['a'] = torch.ones(self.num_items, device=self.device) * 1.5
-    self.params['a_std'] = torch.ones(self.num_items, device=self.device) * 0.5
+    self.params['a'] = torch.ones(self.num_items, device=self.device) * 1.0
+    self.params['a_std'] = torch.ones(
+        self.num_items, device=self.device) * 0.4
 
-    self.params['b'] = torch.ones(self.num_items, device=self.device) * 1.5
-    self.params['b_std'] = torch.ones(self.num_items, device=self.device) * 0.5
+    self.params['b'] = torch.ones(self.num_items, device=self.device) * 1.0
+    self.params['b_std'] = torch.ones(self.num_items, device=self.device) * 2.0
 
-    self.params['alpha_c'] = torch.ones(self.num_items, device=self.device) * 1
-    self.params['beta_c'] = torch.ones(self.num_items, device=self.device) * 3
+    self.params['alpha_c'] = torch.ones(
+        self.num_items, device=self.device) * 3.0
+    self.params['beta_c'] = torch.ones(
+        self.num_items, device=self.device) * 17.0
 
-  def model_hierarchical(self, models, items, obs):
+  def model_hierarchical(self, models, items, obs, thetas):
     # Theta param
-    m_theta = torch.zeros(self.num_subjects, device=self.device)
-    s_theta = torch.ones(self.num_subjects, device=self.device)
-    with pyro.plate("thetas", self.num_subjects, device=self.device):
-      ability = pyro.sample("theta", dist.Normal(m_theta, s_theta))
+    # m_theta = torch.zeros(self.num_subjects, device=self.device)
+    # s_theta = torch.ones(self.num_subjects, device=self.device)
+    # with pyro.plate("thetas", self.num_subjects, device=self.device):
+    #   ability = pyro.sample("theta", dist.Normal(m_theta, s_theta))
+    ability = thetas
 
-    with pyro.plate("params", self.num_items, device=self.device):
-      # Difficulty param
-      diff = pyro.sample("b", dist.Normal(
-          self.params['b'], self.params['b_std']))
+    # Discrimination param
+    disc = pyro.sample("a", dist.Normal(
+        self.params['a'], self.params['a_std']))
 
-      # Discrimination param
-      disc = pyro.sample("a", dist.Normal(
-          self.params['a'], self.params['a_std']))
+    # Difficulty param
+    diff = pyro.sample("b", dist.Normal(
+        self.params['b'], self.params['b_std']))
 
-      # Pseudo-guess param
-      lambdas = pyro.sample('c', dist.Beta(self.params['alpha_c'],
-                                           self.params['beta_c']
-                                           ))
+    # Pseudo-guess param
+    lambdas = pyro.sample('c', dist.Beta(self.params['alpha_c'],
+                                         self.params['beta_c']
+                                         ))
+    # disc = pyro.sample('a', dist.Normal(torch.tensor(
+    #     A_MEAN, device=self.device), torch.tensor(A_STD, device=self.device)))
+    # diff = pyro.sample('b', dist.Normal(torch.tensor(
+    #     B_MEAN, device=self.device), torch.tensor(B_STD, device=self.device)))
+    # lambdas = pyro.sample('c', dist.Beta(torch.tensor(
+    #     C_ALPHA, device=self.device), torch.tensor(C_BETA, device=self.device)))
 
     with pyro.plate("observe_data", obs.size(0)):
-      p_star = torch.sigmoid(disc[items] * (ability[models] - diff[items]))
+      p_star = lambdas[items] + (1-lambdas[items]) * \
+          torch.sigmoid(disc[items] * (ability[models] - diff[items]))
       pyro.sample(
           "obs",
-          dist.Bernoulli(probs=(lambdas[items] + (1-lambdas[items]) * p_star)),
+          dist.Bernoulli(
+              probs=(torch.clamp(p_star, min=0.00001, max=0.99999))),
           obs=obs,
       )
 
-  def guide_hierarchical(self, models, items, obs):
+  def guide_hierarchical(self, models, items, obs, thetas):
     # theta param
-    m_theta_param = pyro.param(
-        "loc_ability", torch.zeros(self.num_subjects, device=self.device)
-    )
-    s_theta_param = pyro.param(
-        "scale_ability",
-        torch.ones(self.num_subjects, device=self.device),
-        constraint=constraints.positive,
-    )
-    with pyro.plate("thetas", self.num_subjects, device=self.device):
-      pyro.sample("theta", dist.Normal(m_theta_param, s_theta_param))
+    # m_theta_param = pyro.param(
+    #     "loc_ability", torch.zeros(self.num_subjects, device=self.device)
+    # )
+    # s_theta_param = pyro.param(
+    #     "scale_ability",
+    #     torch.ones(self.num_subjects, device=self.device),
+    #     constraint=constraints.positive,
+    # )
+    # with pyro.plate("thetas", self.num_subjects, device=self.device):
+    #   pyro.sample("theta", dist.Normal(m_theta_param, s_theta_param))
+
+    # m_a_param = pyro.param("loc_disc", torch.tensor(
+    #     A_MEAN, device=self.device), constraint=constraints.positive)
+    # s_a_param = pyro.param("scale_disc", torch.tensor(
+    #     A_STD, device=self.device), constraint=constraints.positive)
+
+    # m_b_param = pyro.param(
+    #     "loc_diff", torch.tensor(B_MEAN, device=self.device))
+    # s_b_param = pyro.param("scale_diff", torch.tensor(
+    #     B_STD, device=self.device), constraint=constraints.positive)
+
+    # alpha_c_param = pyro.param("alpha_c", torch.tensor(
+    #     C_ALPHA, device=self.device), constraint=constraints.interval(0.001, 50000.0))
+    # beta_c_param = pyro.param("beta_c", torch.tensor(
+    #     C_BETA, device=self.device), constraint=constraints.interval(0.001, 50000.0))
 
     # sample discrimitation params (disc)
     m_a_param = pyro.param(
-        "loc_disc", self.params['a'], constraint=constraints.interval(0.01, 4.5))
+        "loc_disc", self.params['a'], constraint=constraints.positive)
     s_a_param = pyro.param(
         "scale_disc", self.params['a_std'], constraint=constraints.positive)
-
     # Difficulty param
     m_b_param = pyro.param("loc_diff", torch.zeros(
         self.num_items, device=self.device))
@@ -124,20 +159,22 @@ class ThreeParamLog(abstract_model.IrtModel):
     )
     # sample discrimitation params (disc)
     alpha_c_param = pyro.param(
-        "alpha_c", self.params['alpha_c'], constraint=constraints.interval(0.001, 20000.0))
-    alpha_b_param = pyro.param(
-        "beta_c", self.params['beta_c'], constraint=constraints.interval(0.001, 20000.0))
-
+        "alpha_c", self.params['alpha_c'], constraint=constraints.interval(0.001, 50000.0))
+    beta_c_param = pyro.param(
+        "beta_c", self.params['beta_c'], constraint=constraints.interval(0.001, 50000.0))
     with pyro.plate("params", self.num_items, device=self.device):
       pyro.sample('a', dist.Normal(m_a_param, s_a_param))
       pyro.sample("b", dist.Normal(m_b_param, s_b_param))
-      pyro.sample('c', dist.Beta(alpha_c_param, alpha_b_param))
+      pyro.sample('c', dist.Beta(alpha_c_param, beta_c_param))
 
   def export(self):
     return {
-        "ability": pyro.param("loc_ability").data.tolist(),
+        # "ability": pyro.param("loc_ability").data.tolist(),
+        # "scale_ability": pyro.param("scale_ability").data.tolist(),
         "diff": pyro.param("loc_diff").data.tolist(),
+        "scale_diff": pyro.param("scale_diff").data.tolist(),
         "disc": pyro.param("loc_disc").data.tolist(),
+        "scale_disc": pyro.param("scale_disc").data.tolist(),
         "lambdas": (pyro.param("alpha_c")/(pyro.param("alpha_c") + pyro.param("beta_c"))).data.tolist(),
     }
 
@@ -151,7 +188,6 @@ class ThreeParamLog(abstract_model.IrtModel):
     diffs = np.array([model_params["diff"][i] for i in items])
     discs = np.array([model_params["disc"][i] for i in items])
     lambdas = np.array([model_params["lambdas"][i] for i in items])
-
     return lambdas + (1 - lambdas) / (1 + np.exp(-discs * (abilities - diffs)))
 
   def get_guide(self):
