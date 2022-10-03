@@ -69,13 +69,12 @@ class ThreeParamLog(abstract_model.IrtModel):
     self.params['beta_c'] = torch.ones(
         self.num_items, device=self.device) * 17.0
 
-  def model_hierarchical(self, models, items, obs, thetas):
+  def model_hierarchical(self, models, items, obs):
     # Theta param
-    # m_theta = torch.zeros(self.num_subjects, device=self.device)
-    # s_theta = torch.ones(self.num_subjects, device=self.device)
-    # with pyro.plate("thetas", self.num_subjects, device=self.device):
-    #   ability = pyro.sample("theta", dist.Normal(m_theta, s_theta))
-    ability = thetas
+    m_theta = torch.zeros(self.num_subjects, device=self.device)
+    s_theta = torch.ones(self.num_subjects, device=self.device)
+    with pyro.plate("thetas", self.num_subjects, device=self.device):
+      ability = pyro.sample("theta", dist.Normal(m_theta, s_theta))
 
     with pyro.plate("params", self.num_items, device=self.device):
       # Discrimination param
@@ -99,18 +98,18 @@ class ThreeParamLog(abstract_model.IrtModel):
           obs=obs,
       )
 
-  def guide_hierarchical(self, models, items, obs, thetas):
+  def guide_hierarchical(self, models, items, obs):
     # theta param
-    # m_theta_param = pyro.param(
-    #     "loc_ability", torch.zeros(self.num_subjects, device=self.device)
-    # )
-    # s_theta_param = pyro.param(
-    #     "scale_ability",
-    #     torch.ones(self.num_subjects, device=self.device),
-    #     constraint=constraints.positive,
-    # )
-    # with pyro.plate("thetas", self.num_subjects, device=self.device):
-    #   pyro.sample("theta", dist.Normal(m_theta_param, s_theta_param))
+    m_theta_param = pyro.param(
+        "loc_ability", torch.zeros(self.num_subjects, device=self.device)
+    )
+    s_theta_param = pyro.param(
+        "scale_ability",
+        torch.ones(self.num_subjects, device=self.device),
+        constraint=constraints.positive,
+    )
+    with pyro.plate("thetas", self.num_subjects, device=self.device):
+      pyro.sample("theta", dist.Normal(m_theta_param, s_theta_param))
 
     # sample discrimitation params (disc)
 
