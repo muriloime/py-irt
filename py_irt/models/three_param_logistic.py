@@ -57,17 +57,14 @@ class ThreeParamLog(abstract_model.IrtModel):
         num_items=num_items, num_subjects=num_subjects, device=device, verbose=verbose
     )
     self.params = {}
-    self.params['a'] = torch.ones(self.num_items, device=self.device) * 0.0
-    self.params['a_std'] = torch.ones(
-        self.num_items, device=self.device) * 0.4
-
-    self.params['b'] = torch.ones(self.num_items, device=self.device) * 0.0
+    self.params['a'] = torch.ones(self.num_items, device=self.device) * 0.5
+    self.params['a_std'] = torch.ones(self.num_items, device=self.device) * 0.3
+    self.params['b'] = torch.ones(self.num_items, device=self.device) * 1.0
     self.params['b_std'] = torch.ones(self.num_items, device=self.device) * 1.0
-
-    self.params['alpha_c'] = torch.ones(
-        self.num_items, device=self.device) * 3.0
-    self.params['beta_c'] = torch.ones(
-        self.num_items, device=self.device) * 17.0
+    self.params['c'] = torch.ones(self.num_items, device=self.device) * 0.2
+    self.params['c_std'] = torch.ones(self.num_items, device=self.device) * .06
+    self.params['alpha_c'] = torch.ones(self.num_items, device=self.device) * 2
+    self.params['beta_c'] = torch.ones(self.num_items, device=self.device) * 17
 
   def model_hierarchical(self, models, items, obs):
     # Theta param
@@ -80,23 +77,18 @@ class ThreeParamLog(abstract_model.IrtModel):
       # Discrimination param
       disc = pyro.sample("a", dist.LogNormal(
           self.params['a'], self.params['a_std']))
-
-      # Difficulty param
       diff = pyro.sample("b", dist.Normal(
           self.params['b'], self.params['b_std']))
+      lambdas = pyro.sample('c', dist.Beta(
+          self.params['alpha_c'], self.params['beta_c']))
 
-      # Pseudo-guess param
-      lambdas = pyro.sample('c', dist.Beta(self.params['alpha_c'],
-                                           self.params['beta_c']
-                                           ))
+    # import pdb
+    # pdb.set_trace()
+    p_star = lambdas[items] + (1-lambdas[items]) * \
+        torch.sigmoid(disc[items] * (ability[models] - diff[items]))
 
     with pyro.plate("observe_data", obs.size(0)):
-      p_star = torch.sigmoid(disc[items] * (ability[models] - diff[items]))
-      pyro.sample(
-          "obs",
-          dist.Bernoulli(probs=(lambdas[items] + (1-lambdas[items]) * p_star)),
-          obs=obs,
-      )
+      pyro.sample("obs", dist.Bernoulli(probs=p_star), obs=obs)
 
   def guide_hierarchical(self, models, items, obs):
     # theta param
@@ -114,38 +106,42 @@ class ThreeParamLog(abstract_model.IrtModel):
     # sample discrimitation params (disc)
 
     m_a_param = pyro.param(
-        "loc_disc", self.params['a'])
-    s_a_param = pyro.param(
-        "scale_disc", self.params['a_std'], constraint=constraints.positive)
+        "loc_disc",
+        # self.params['a'],
+        lambda: torch.empty(self.num_items, device=self.device).fill_(1.0),
+        constraint=constraints.interval(0.2, 6.499)
+    )
 
     # Difficulty param
-    m_b_param = pyro.param("loc_diff", torch.zeros(
-        self.num_items, device=self.device))
-    s_b_param = pyro.param(
-        "scale_diff",
-        torch.ones(self.num_items, device=self.device),
-        constraint=constraints.positive,
-    )
+    m_b_param = pyro.param(
+        "loc_diff",
+        # self.params['b'],
+        lambda: torch.empty(self.num_items, device=self.device).fill_(1.0),
+        constraint=constraints.interval(-3.0, 5.0))
     # sample discrimitation params (disc)
-    alpha_c_param = pyro.param(
-        "alpha_c", self.params['alpha_c'], constraint=constraints.interval(0.001, 20000.0))
-    alpha_b_param = pyro.param(
-        "beta_c", self.params['beta_c'], constraint=constraints.interval(0.001, 20000.0))
+    m_c_param = pyro.param(
+        "loc_guess",
+        # self.params['c'],
+        lambda: torch.empty(self.num_items, device=self.device).fill_(0.15),
+        constraint=constraints.interval(0.001, 0.499))
+
     with pyro.plate("params", self.num_items, device=self.device):
-      pyro.sample('a', dist.LogNormal(m_a_param, s_a_param))
-      pyro.sample("b", dist.Normal(m_b_param, s_b_param))
-      pyro.sample('c', dist.Beta(alpha_c_param, alpha_b_param))
+      disc = pyro.sample('a', dist.Delta(m_a_param))
+      diff = pyro.sample("b", dist.Delta(m_b_param))
+      lambdas = pyro.sample('c', dist.Delta(m_c_param))
 
   def export(self):
+    return {name: pyro.param(name).data.tolist() for name in pyro.get_param_store().get_all_param_names()}
     return {
         # "ability": pyro.param("loc_ability").data.tolist(),
         # "scale_ability": pyro.param("scale_ability").data.tolist(),
         "diff": pyro.param("loc_diff").data.tolist(),
-        "scale_diff": pyro.param("scale_diff").data.tolist(),
-        "a": torch.exp(pyro.param("loc_disc") + pyro.param("scale_disc") ** 2).data.tolist(),
+        # "scale_diff": pyro.param("scale_diff").data.tolist(),
+        # "a": torch.exp(pyro.param("loc_disc") + pyro.param("scale_disc") ** 2).data.tolist(),
         "disc": pyro.param("loc_disc").data.tolist(),
-        "scale_disc": pyro.param("scale_disc").data.tolist(),
-        "lambdas": (pyro.param("alpha_c")/(pyro.param("alpha_c") + pyro.param("beta_c"))).data.tolist(),
+        "guess": pyro.param("loc_guess").data.tolist(),
+        # "scale_disc": pyro.param("scale_disc").data.tolist(),
+        # "lambdas": (pyro.param("alpha_c")/(pyro.param("alpha_c") + pyro.param("beta_c"))).data.tolist(),
     }
 
   def predict(self, subjects, items, params_from_file=None):
@@ -161,6 +157,7 @@ class ThreeParamLog(abstract_model.IrtModel):
     return lambdas + (1 - lambdas) / (1 + np.exp(-discs * (abilities - diffs)))
 
   def get_guide(self):
+    # return pyro.infer.autoguide.AutoDelta(self.get_model())
     return self.guide_hierarchical
 
   def get_model(self):
